@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-upload-job
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: model-uploader
+        image: busybox:latest
+        command: ['sh', '-c', 'echo "Model files should be copied to /mnt/models/ directory"; sleep 10']
+        volumeMounts:
+        - name: model-storage
+          mountPath: /mnt/models
+      restartPolicy: Never
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-storage-pvc
+  backoffLimit: 3
