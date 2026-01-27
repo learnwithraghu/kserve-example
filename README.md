@@ -83,12 +83,12 @@ kserve-training/
 
 1. **Python 3.8+** installed
    ```bash
-   python --version
+   python3 --version
    ```
 
 2. **pip** (Python package manager)
    ```bash
-   pip --version
+   pip3 --version
    ```
 
 ### Kubernetes Cluster Requirements
@@ -105,7 +105,42 @@ kserve-training/
    ```bash
    kubectl get crd inferenceservices.serving.kserve.io
    ```
-   - If not installed, follow: https://kserve.github.io/website/latest/admin/serverless/serverless/
+   - If not installed, install KServe (for minikube/local clusters):
+   ```bash
+   # Install cert-manager (required by KServe)
+   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+   
+   # Wait for cert-manager to be ready
+   kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=300s
+   
+   # Install Istio (required for KServe)
+   # Note: Use Istio 1.17.0 for Kubernetes 1.23.x, or Istio 1.19.0+ for Kubernetes 1.25+
+   K8S_VERSION=$(kubectl version --short | grep "Server Version" | awk '{print $3}' | cut -d. -f1,2)
+   if [[ "$K8S_VERSION" < "1.25" ]]; then
+     ISTIO_VERSION=1.17.0
+   else
+     ISTIO_VERSION=1.19.0
+   fi
+   curl -L https://istio.io/downloadIstio | ISTIO_VERSION=$ISTIO_VERSION sh -
+   cd istio-$ISTIO_VERSION
+   export PATH=$PWD/bin:$PATH
+   istioctl install --set profile=minimal -y
+   
+   # Install KServe
+   kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve.yaml
+   kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve-runtimes.yaml
+   
+   # Verify installation
+   kubectl get crd inferenceservices.serving.kserve.io
+   kubectl get pods -n kserve
+   ```
+   
+   **Note**: If you encounter "Insufficient memory" errors, increase minikube resources:
+   ```bash
+   minikube stop
+   minikube start --memory=4096 --cpus=2
+   ```
+   - For production clusters, follow: https://kserve.github.io/website/latest/admin/serverless/serverless/
 
 3. **kubectl configured** to access your cluster
    ```bash
@@ -140,7 +175,7 @@ cd kserve-training
 
 ```bash
 # Create a virtual environment
-python -m venv venv
+python3 -m venv venv
 
 # Activate it (Linux/Mac)
 source venv/bin/activate
@@ -155,6 +190,8 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
+# Or use pip3 if pip is not available:
+# pip3 install -r requirements.txt
 ```
 
 **Why?** This installs all required Python libraries:
@@ -169,6 +206,8 @@ pip install -r requirements.txt
 
 ```bash
 python scripts/generate_data.py
+# Or use python3 if python is not available:
+# python3 scripts/generate_data.py
 ```
 
 **What this does:**
@@ -199,6 +238,8 @@ Generating 10000 synthetic banking customer records...
 
 ```bash
 python scripts/train_model.py
+# Or use python3 if python is not available:
+# python3 scripts/train_model.py
 ```
 
 **What this does:**
@@ -465,6 +506,8 @@ The prediction client sends sample customer data to the KServe endpoint and disp
 **Basic usage with sample data:**
 ```bash
 python scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict
+# Or use python3 if python is not available:
+# python3 scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict
 ```
 
 **What this does:**
@@ -520,6 +563,8 @@ Customer 2: CUST002
 **Verbose mode (see raw request/response):**
 ```bash
 python scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict --verbose
+# Or use python3 if python is not available:
+# python3 scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict --verbose
 ```
 
 **Why use verbose?** Helps debug issues and understand the exact API format.
@@ -551,6 +596,8 @@ EOF
 **Run prediction with custom data:**
 ```bash
 python scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict --input custom_customers.json
+# Or use python3 if python is not available:
+# python3 scripts/predict_client.py --url http://churn-predictor.default.example.com/v1/models/churn-predictor:predict --input custom_customers.json
 ```
 
 **Why?** This shows how to integrate the model with real customer data from your systems.
@@ -647,6 +694,9 @@ kubectl port-forward -n istio-system service/istio-ingressgateway 8080:80
 # Then use localhost
 python scripts/predict_client.py --url http://localhost:8080/v1/models/churn-predictor:predict \
   -H "Host: churn-predictor.default.example.com"
+# Or use python3 if python is not available:
+# python3 scripts/predict_client.py --url http://localhost:8080/v1/models/churn-predictor:predict \
+#   -H "Host: churn-predictor.default.example.com"
 ```
 
 ### Issue: Prediction errors or wrong results
@@ -717,7 +767,7 @@ The SKLearn runtime is a pre-built container that:
 
 In [`inferenceservice.yaml`](kubernetes/inferenceservice.yaml):
 ```yaml
-storageUri: pvc://model-storage-pvc/model/
+      storageUri: pvc://model-storage-pvc/model/
 ```
 
 This tells KServe:

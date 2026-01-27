@@ -8,7 +8,7 @@ spec:
     sklearn:
       # Use the SKLearn runtime provided by KServe
       # This runtime automatically handles scikit-learn models
-      storageUri: pvc://model-storage-pvc/
+      storageUri: pvc://model-storage-pvc/model/
       # Resource requests and limits
       resources:
         requests:
