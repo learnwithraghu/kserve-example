@@ -100,47 +100,47 @@ kserve-training/
    ```
 
 2. **KServe installed** on the cluster (v0.10+)
-   - KServe requires Istio or Knative for networking
    - Check if KServe is installed:
    ```bash
    kubectl get crd inferenceservices.serving.kserve.io
    ```
-   - If not installed, install KServe (for minikube/local clusters):
+   
+   - If not installed, install KServe with RawDeployment mode (no Knative/Istio required):
    ```bash
-   # Install cert-manager (required by KServe)
+   # Install cert-manager (required by KServe for webhook certificates)
    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
    
    # Wait for cert-manager to be ready
    kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=300s
    
-   # Install Istio (required for KServe)
-   # Note: Use Istio 1.17.0 for Kubernetes 1.23.x, or Istio 1.19.0+ for Kubernetes 1.25+
-   K8S_VERSION=$(kubectl version --short | grep "Server Version" | awk '{print $3}' | cut -d. -f1,2)
-   if [[ "$K8S_VERSION" < "1.25" ]]; then
-     ISTIO_VERSION=1.17.0
-   else
-     ISTIO_VERSION=1.19.0
-   fi
-   curl -L https://istio.io/downloadIstio | ISTIO_VERSION=$ISTIO_VERSION sh -
-   cd istio-$ISTIO_VERSION
-   export PATH=$PWD/bin:$PATH
-   istioctl install --set profile=minimal -y
-   
    # Install KServe
    kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve.yaml
-   kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve-runtimes.yaml
+   
+   # Install KServe cluster runtimes (includes sklearn, tensorflow, pytorch, etc.)
+   kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve-cluster-resources.yaml
+   
+   # Configure KServe for RawDeployment mode (works without Knative/Istio)
+   kubectl patch configmap inferenceservice-config -n kserve --type='json' \
+     -p='[{"op": "replace", "path": "/data/deploy", "value": "{\n  \"defaultDeploymentMode\": \"RawDeployment\"\n}"}]'
+   
+   # Restart KServe controller to apply configuration
+   kubectl delete pod -n kserve -l control-plane=kserve-controller-manager
+   
+   # Wait for KServe controller to be ready
+   kubectl wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n kserve --timeout=180s
    
    # Verify installation
    kubectl get crd inferenceservices.serving.kserve.io
    kubectl get pods -n kserve
    ```
    
-   **Note**: If you encounter "Insufficient memory" errors, increase minikube resources:
-   ```bash
-   minikube stop
-   minikube start --memory=4096 --cpus=2
-   ```
-   - For production clusters, follow: https://kserve.github.io/website/latest/admin/serverless/serverless/
+   **Why RawDeployment mode?**
+   - Works on any Kubernetes cluster without additional networking components
+   - Simpler setup for development and testing
+   - Uses standard Kubernetes Deployments and Services
+   - For serverless features (autoscaling to zero), use Serverless mode with Knative
+   
+   **Note**: For Rancher Desktop or other local clusters, RawDeployment mode is recommended.
 
 3. **kubectl configured** to access your cluster
    ```bash
@@ -189,16 +189,17 @@ source venv/bin/activate
 ### Step 3: Install Dependencies
 
 ```bash
-pip install -r requirements.txt
-# Or use pip3 if pip is not available:
-# pip3 install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
-**Why?** This installs all required Python libraries:
-- `pandas` & `numpy`: Data manipulation
-- `scikit-learn`: Machine learning framework
+**Why?** This installs all required Python libraries with versions compatible with KServe SKLearn server v0.12.0:
+- `pandas` & `numpy==1.24.3`: Data manipulation
+- `scikit-learn==1.3.2`: Machine learning framework (pinned to match KServe)
 - `joblib`: Model serialization
 - `requests`: HTTP client for API calls
+- `tabulate`: Better output formatting
+
+**Note:** The versions are pinned in [`requirements.txt`](requirements.txt) to ensure compatibility with KServe. Do not upgrade scikit-learn or numpy as it will cause model loading failures.
 
 **Expected output:** You'll see packages being downloaded and installed.
 
@@ -362,31 +363,31 @@ kubectl run model-uploader --image=busybox --restart=Never --overrides='
 kubectl wait --for=condition=Ready pod/model-uploader --timeout=60s
 ```
 
-**Copy model files to the pod:**
+**Copy ONLY the model.joblib file to the pod:**
 ```bash
-kubectl cp model/ model-uploader:/mnt/models/
+# Remove old files if they exist
+kubectl exec model-uploader -- sh -c "rm -rf /mnt/models/model/*"
+
+# Copy only the model.joblib file
+kubectl cp model/model.joblib model-uploader:/mnt/models/model/
 ```
 
-**What this does:** Copies the entire `model/` directory (with all model artifacts) into the PVC at `/mnt/models/`.
+**⚠️ IMPORTANT:** The KServe SKLearn server expects **only one .joblib file** in the model directory. If you have multiple .joblib files (scaler.joblib, label_encoders.joblib, etc.), the server will fail with:
+```
+RuntimeError: More than one model file is detected, Only one is allowed within model_dir
+```
 
-**Why?** KServe will look for the model files in this location when the InferenceService starts.
+**Why?** KServe's built-in SKLearn runtime loads the model directly without custom preprocessing. The model must be self-contained (preprocessing already applied during training).
 
-**Verify the files were copied:**
+**Verify the file was copied:**
 ```bash
-kubectl exec model-uploader -- ls -la /mnt/models/model/
+kubectl exec model-uploader -- ls -lh /mnt/models/model/
 ```
 
 **Expected output:**
 ```
-total XXX
-drwxr-xr-x    2 root     root          4096 Jan 27 05:00 .
-drwxr-xr-x    3 root     root          4096 Jan 27 05:00 ..
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 feature_names.json
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 label_encoders.joblib
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 metadata.json
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 metrics.json
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 model.joblib
--rw-r--r--    1 root     root        XXXXX Jan 27 05:00 scaler.joblib
+total 2.5M
+-rw-r--r--    1 502      staff       2.5M Jan 29 07:37 model.joblib
 ```
 
 **Clean up the temporary pod:**
@@ -604,15 +605,25 @@ python scripts/predict_client.py --url http://churn-predictor.default.example.co
 
 ### Step 12: Direct API Testing with curl
 
-You can also test the endpoint directly with curl:
+You can also test the endpoint directly with curl.
 
+**For RawDeployment mode (internal cluster access):**
+```bash
+# Test from within the cluster
+kubectl run test-client --rm -i --restart=Never --image=curlimages/curl -- \
+  curl -X POST http://churn-predictor-predictor.default.svc.cluster.local/v1/models/churn-predictor:predict \
+  -H 'Content-Type: application/json' \
+  -d '{"instances": [[650, 0, 1, 42, 8, 125000.50, 2, 1, 1, 75000.00]]}'
+```
+
+**For external access (if ingress is configured):**
 ```bash
 curl -X POST \
-  http://churn-predictor.default.example.com/v1/models/churn-predictor:predict \
+  http://churn-predictor-default.example.com/v1/models/churn-predictor:predict \
   -H 'Content-Type: application/json' \
   -d '{
     "instances": [
-      [650, "France", "Male", 42, 8, 125000.50, 2, 1, 1, 75000.00]
+      [650, 0, 1, 42, 8, 125000.50, 2, 1, 1, 75000.00]
     ]
   }'
 ```
@@ -624,37 +635,89 @@ curl -X POST \
 **Expected response:**
 ```json
 {
-  "predictions": [0]
+  "predictions": [1]
 }
 ```
 
-**Note:** The instance array must have features in this exact order:
-1. credit_score
-2. geography
-3. gender
-4. age
-5. tenure
-6. balance
-7. num_products
-8. has_credit_card
-9. is_active_member
-10. estimated_salary
+**⚠️ IMPORTANT - Feature Encoding:** The instance array must have **numeric values only** in this exact order:
+1. credit_score (numeric: 300-850)
+2. geography (encoded: 0=France, 1=Germany, 2=Spain)
+3. gender (encoded: 0=Female, 1=Male)
+4. age (numeric: 18-80)
+5. tenure (numeric: 0-10)
+6. balance (numeric: 0-250000)
+7. num_products (numeric: 1-4)
+8. has_credit_card (numeric: 0 or 1)
+9. is_active_member (numeric: 0 or 1)
+10. estimated_salary (numeric: 10000-200000)
+
+**Why numeric encoding?** The KServe SKLearn runtime loads the raw model without preprocessing. Categorical values must be pre-encoded before sending to the API.
 
 ---
 
 ## 🔧 Troubleshooting
+
+### Issue: Multiple Model Files Error
+
+**Symptoms:**
+```
+RuntimeError: More than one model file is detected, Only one is allowed within model_dir
+```
+
+**Cause:** Multiple .joblib files in the model directory (model.joblib, scaler.joblib, label_encoders.joblib).
+
+**Solution:**
+```bash
+# Keep only model.joblib in the PVC
+kubectl run model-uploader --image=busybox --restart=Never --overrides='...'
+kubectl wait --for=condition=Ready pod/model-uploader --timeout=60s
+kubectl exec model-uploader -- sh -c "cd /mnt/models/model && mkdir -p extras && mv label_encoders.joblib scaler.joblib extras/ 2>/dev/null || true"
+kubectl delete pod model-uploader
+
+# Restart the predictor
+kubectl delete pod -l serving.kserve.io/inferenceservice=churn-predictor
+```
+
+### Issue: KServe Controller CrashLoopBackOff
+
+**Symptoms:**
+```
+kserve-controller-manager pod in CrashLoopBackOff
+error: secret "kserve-webhook-server-cert" not found
+```
+
+**Cause:** cert-manager not installed or not creating certificates.
+
+**Solution:**
+```bash
+# Install cert-manager
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=300s
+
+# Reinstall KServe to create certificates
+kubectl apply -f https://github.com/kserve/kserve/releases/download/v0.12.0/kserve.yaml
+
+# Verify certificate was created
+kubectl get certificate -n kserve
+
+# Restart KServe controller
+kubectl delete pod -n kserve -l control-plane=kserve-controller-manager
+kubectl wait --for=condition=ready pod -l control-plane=kserve-controller-manager -n kserve --timeout=180s
+```
 
 ### Issue: InferenceService not becoming Ready
 
 **Check the status:**
 ```bash
 kubectl describe inferenceservice churn-predictor
+kubectl get pods -l serving.kserve.io/inferenceservice=churn-predictor
+kubectl logs -l serving.kserve.io/inferenceservice=churn-predictor --tail=50
 ```
 
 **Common causes:**
 1. **Model files not found in PVC**
    - Verify: `kubectl exec model-uploader -- ls /mnt/models/model/`
-   - Solution: Re-upload model files (Step 8)
+   - Solution: Re-upload model files (Step 7)
 
 2. **Insufficient resources**
    - Check: `kubectl describe pod -l serving.kserve.io/inferenceservice=churn-predictor`
@@ -663,6 +726,10 @@ kubectl describe inferenceservice churn-predictor
 3. **Image pull errors**
    - Check: `kubectl get pods -l serving.kserve.io/inferenceservice=churn-predictor`
    - Solution: Ensure cluster has internet access to pull KServe images
+
+4. **Webhook errors**
+   - Check: `kubectl get pods -n kserve`
+   - Solution: Ensure KServe controller is running and cert-manager is installed
 
 ### Issue: PVC stuck in Pending state
 

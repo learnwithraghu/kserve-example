@@ -5,9 +5,11 @@ metadata:
   namespace: default
 spec:
   predictor:
-    sklearn:
+    model:
       # Use the SKLearn runtime provided by KServe
       # This runtime automatically handles scikit-learn models
+      modelFormat:
+        name: sklearn
       storageUri: pvc://model-storage-pvc/model/
       # Resource requests and limits
       resources:
